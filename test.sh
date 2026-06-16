@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Usage: ./test.sh <model> <static|no_static> [gpu] [run_dir] [note]
-#   model : seq2seq_lstm | encdec_lstm | seq2seq_ssm | diffusion_lstm | diffusion_unet | diffusion_ssm
+#   model : seq2seq_lstm | encdec_lstm | seq2seq_ssm | diffusion_lstm | diffusion_unet | decoder_only_ssm | decoder_only_ssm_hybrid
 #   flag  : static | no_static
 #   gpu   : CUDA device ID (default 0)
 #   run_dir: the running directory
