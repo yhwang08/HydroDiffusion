@@ -123,7 +123,7 @@ Each `.npz` file contains the following arrays:
 These files are saved automatically to the model’s `run_dir`, for example:
 
 ```
-runs/run_0306_1938_seed3407/ensembles_epoch60.npz
+runs/run_2507_2120_seed3407/ensembles_epoch60.npz
 ```
 
 **Notes**
@@ -149,7 +149,7 @@ python analysis/main_performance_full_evaluation.py <experiment_name> <npz_path>
 ### Example
 
 ```
-python analysis/main_performance_full_evaluation.py decoder_only_ssm runs/run_0306_1938_seed3407/ensembles_epoch60.npz
+python analysis/main_performance_full_evaluation.py decoder_only_ssm runs/run_2507_2120_seed3407/ensembles_epoch60.npz
 ```
 
 ### Description
