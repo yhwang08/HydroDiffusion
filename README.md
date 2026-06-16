@@ -55,7 +55,7 @@ Note: Do not use shared_h5_new if you plan to train with forcings other than **D
 
 | Argument | Description |
 |-----------|-------------|
-| model | Model architecture name. Options include:<br>• seq2seq_lstm – (deterministic) sequence-to-sequence LSTM baseline<br>• encdec_lstm – (deterministic) encoder–decoder LSTM baseline<br>• seq2seq_ssm – (deterministic) state-space model (S4D-FT)<br>• decoder_only_ssm – HydroDiffusion model<br>• decoder_only_ssm_hybrid – HydroDiffusion with hybrid FFT+recurrent inference (~17x faster than the original implementation)<br>• diffusion_lstm – DiffusionLSTM_encdec <br>• decoder_only_lstm – DiffusionLSTM_dec |
+| model | Model architecture name. Options include:<br>• seq2seq_lstm – (deterministic) sequence-to-sequence LSTM baseline<br>• encdec_lstm – (deterministic) encoder–decoder LSTM baseline<br>• seq2seq_ssm – (deterministic) state-space model (S4D-FT)<br>• decoder_only_ssm – HydroDiffusion model<br>• decoder_only_ssm_hybrid – HydroDiffusion with hybrid FFT+recurrent inference (~17x faster than the original implementation, numerically equivalent to decoder_only_ssm)<br>• diffusion_lstm – DiffusionLSTM_encdec <br>• decoder_only_lstm – DiffusionLSTM_dec |
 | flag | Whether to include static catchment features (`static`) or not (`no_static`). Default: `static`. |
 | gpu | CUDA device ID (default: `0`). |
 | note | Custom tag appended to log filenames (no spaces). |
@@ -74,7 +74,7 @@ This command will:
 3. Save training logs to:
 
    ```
-   reports/global_diffusion_ssm_static_<seed>_myExperiment.out
+   reports/global_decoder_only_ssm_static_<seed>_myExperiment.out
    ```
 
 The run directory (printed in the log) contains checkpoints and outputs, for example:
@@ -129,7 +129,7 @@ runs/run_0306_1938_seed3407/ensembles_epoch60.npz
 **Notes**
 
 - Executes `main.py evaluate_generic` using the trained checkpoint.  
-- Writes outputs and metrics to `reports/` (e.g., `reports/test_diffusion_ssm_static_3407_myExperiment.out`).  
+- Writes outputs and metrics to `reports/` (e.g., `reports/test_decoder_only_ssm_static_3407_myExperiment.out`).  
 - To locate the `run_dir`, open the training log and find the line:
 
   ```
@@ -149,7 +149,7 @@ python analysis/main_performance_full_evaluation.py <experiment_name> <npz_path>
 ### Example
 
 ```
-python analysis/main_performance_full_evaluation.py diffusion_ssm runs/run_0306_1938_seed3407/ensembles_epoch60.npz
+python analysis/main_performance_full_evaluation.py decoder_only_ssm runs/run_0306_1938_seed3407/ensembles_epoch60.npz
 ```
 
 ### Description
@@ -176,10 +176,10 @@ The script generates one CSV file per forecast lead time:
 
 ```
 analysis/ensemble_stats/
-├── diffusion_ssm_det_lead1.csv
-├── diffusion_ssm_det_lead2.csv
-├── diffusion_ssm_prob_lead1.csv
-└── diffusion_ssm_prob_lead2.csv
+├── decoder_only_ssm_det_lead1.csv
+├── decoder_only_ssm_det_lead2.csv
+├── decoder_only_ssm_prob_lead1.csv
+└── decoder_only_ssm_prob_lead2.csv
 ```
 
 Each CSV file summarizes per-basin results, and includes mean and median statistics across all basins for each lead time.
