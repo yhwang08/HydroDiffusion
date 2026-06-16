@@ -64,7 +64,7 @@ Note: Do not use shared_h5_new if you plan to train with forcings other than **D
 ### Example
 
 ```
-./train.sh diffusion_ssm static 0 myExperiment
+./train.sh decoder_only_ssm static 0 myExperiment
 ```
 
 This command will:
