@@ -197,22 +197,6 @@ Each CSV file summarizes per-basin results, and includes mean and median statist
 
 ---
 
-## 4. Implementation Notes
-
-### Fast Inference
-
-All diffusion models support a faster inference mode that avoids redundant computation across ensemble members:
-
-| Model | Fast Variant | Speedup | Method |
-|-------|-------------|---------|--------|
-| `decoder_only_ssm` | `decoder_only_ssm_hybrid` | ~17x | Hybrid FFT (past) + recurrent (future H=8 steps) decoding; past encoding cached once |
-| `diffusion_lstm` | `diffusion_lstm_fast` | — | LSTM encoder runs once; cached `(h_enc, c_enc)` reused across all 50 ensemble members |
-| `decoder_only_lstm` | `decoder_only_lstm_fast` | — | Past LSTM segment cached once; only H-step future decode runs per DDIM step per sample |
-
-Fast variants are **numerically equivalent** to their originals and load the same checkpoints — no retraining needed.
-
----
-
 ## 5. HydroDiffusion Checkpoint
 
 The **HydroDiffusion** checkpoint used in the paper is included in this repository for reproducibility.
