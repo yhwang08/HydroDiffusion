@@ -108,7 +108,7 @@ The file naming convention depends on the model type:
 
 | Model Type | Output File | Description |
 |-------------|--------------|--------------|
-| DiffusionLSTM (`diffusion_lstm` for DiffusionLSTM_{EncDec}, `decoder_only_lstm` for DiffusionLSTM_{Dec}) | `ensembles_epochbest.npz` | Full ensemble forecasts `(N, S, H)` generated from the best-performing epoch. |
+| DiffusionLSTM (DiffusionLSTM<sub>EncDec</sub> (`diffusion_lstm`) and DiffusionLSTM<sub>Dec</sub> (`decoder_only_lstm`)) | `ensembles_epochbest.npz` | Full ensemble forecasts `(N, S, H)` generated from the best-performing epoch. |
 | HydroDiffusion (`decoder_only_ssm`) | `ensembles_epoch60.npz` | Full ensemble forecasts `(N, S, H)` generated from epoch 60. |
 | LSTM deterministic models (`encdec_lstm`, `seq2seq_lstm`) | `deterministic_epoch30.npz` | Mean predictions `(N, H)` from epoch 30. |
 | SSM deterministic models (`seq2seq_ssm`, etc.) | `deterministic_epoch49.npz` | Mean predictions `(N, H)` from epoch 49. |
