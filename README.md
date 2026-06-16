@@ -57,7 +57,7 @@ Note: Do not use shared_h5_new if you plan to train with forcings other than **D
 
 | Argument | Description |
 |-----------|-------------|
-| model | Model architecture name. Options include:<br>• seq2seq_lstm – (deterministic) sequence-to-sequence LSTM baseline<br>• encdec_lstm – (deterministic) encoder–decoder LSTM baseline<br>• seq2seq_ssm – (deterministic) state-space model (S4D-FT)<br>• decoder_only_ssm – HydroDiffusion model<br>• diffusion_lstm – DiffusionLSTM_encdec <br>• decoder_only_lstm – DiffusionLSTM_dec |
+| model | Model architecture name. Options include:<br>• seq2seq_lstm – (deterministic) sequence-to-sequence LSTM baseline<br>• encdec_lstm – (deterministic) encoder–decoder LSTM baseline<br>• seq2seq_ssm – (deterministic) state-space model (S4D-FT)<br>• decoder_only_ssm – HydroDiffusion model<br>• decoder_only_ssm_hybrid – HydroDiffusion with hybrid FFT+recurrent inference (~17x faster than the original implementation)<br>• diffusion_lstm – DiffusionLSTM_encdec <br>• decoder_only_lstm – DiffusionLSTM_dec |
 | flag | Whether to include static catchment features (`static`) or not (`no_static`). Default: `static`. |
 | gpu | CUDA device ID (default: `0`). |
 | note | Custom tag appended to log filenames (no spaces). |
