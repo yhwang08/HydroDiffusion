@@ -30,6 +30,8 @@ from papercode.backbones.unet_attention_film_v2 import unet_attention_film_v2
 from papercode.backbones.unet_attention_film_v3 import unet_attention_film_v3
 
 from papercode.decoder_only_lstm import decoder_only_lstm
+from papercode.decoder_only_lstm_fast import decoder_only_lstm as decoder_only_lstm_fast
+from papercode.diffusion_lstm_fast import DiffusionLSTMFast
 
 from papercode.diffusion_wrapper import EncoderDecoderDiffusionWrapper
 
@@ -180,8 +182,8 @@ def evaluate(cfg: dict):
     # --- build model ---
     is_diffusion = (
         cfg["model_name"] in [
-            "diffusion_lstm", "diffusion_unet", "diffusion_ssm",
-            "decoder_only_ssm", "decoder_only_lstm",
+            "diffusion_lstm", "diffusion_lstm_fast", "diffusion_unet", "diffusion_ssm",
+            "decoder_only_ssm", "decoder_only_lstm", "decoder_only_lstm_fast",
             "diffusion_ssm_unet", "diffusion_ssm_lstm"
         ]
     )
@@ -196,7 +198,7 @@ def evaluate(cfg: dict):
 
         static_size = 0 if cfg["no_static"] else (in_size_dyn - dyn_in)
 
-        if cfg["model_name"] == "diffusion_lstm":
+        if cfg["model_name"] in ["diffusion_lstm", "diffusion_lstm_fast"]:
             encoder = GenericLSTM(
                 input_size=in_size_dyn,
                 hidden_size=cfg["hidden_size"],
@@ -211,14 +213,24 @@ def evaluate(cfg: dict):
                 init_forget_bias=cfg['initial_forget_gate_bias'],
                 batch_first=True
             )
-            model = EncoderDecoderDiffusionWrapper(
-                encoder=encoder,
-                decoder=decoder,
-                hidden_size=cfg["hidden_size"],
-                time_emb_dim=cfg.get("time_emb_dim", 256),
-                decoder_name='lstm',
-                prediction_type='velocity'
-            ).to(device)
+            if cfg["model_name"] == "diffusion_lstm_fast":
+                model = DiffusionLSTMFast(
+                    encoder=encoder,
+                    decoder=decoder,
+                    hidden_size=cfg["hidden_size"],
+                    time_emb_dim=cfg.get("time_emb_dim", 256),
+                    decoder_name='lstm',
+                    prediction_type='velocity'
+                ).to(device)
+            else:
+                model = EncoderDecoderDiffusionWrapper(
+                    encoder=encoder,
+                    decoder=decoder,
+                    hidden_size=cfg["hidden_size"],
+                    time_emb_dim=cfg.get("time_emb_dim", 256),
+                    decoder_name='lstm',
+                    prediction_type='velocity'
+                ).to(device)
 
         elif cfg["model_name"] == "diffusion_unet":
             encoder = GenericLSTM(
@@ -292,8 +304,9 @@ def evaluate(cfg: dict):
                 time_full=True
             ).to(cfg['DEVICE'])
 
-        elif cfg['model_name'] == 'decoder_only_lstm':
-            model = decoder_only_lstm(
+        elif cfg['model_name'] in ['decoder_only_lstm', 'decoder_only_lstm_fast']:
+            cls = decoder_only_lstm_fast if cfg['model_name'] == 'decoder_only_lstm_fast' else decoder_only_lstm
+            model = cls(
                 d_input=in_size_dyn,
                 hidden_size=cfg['hidden_size'],
                 cfg=cfg,
@@ -477,12 +490,12 @@ def evaluate(cfg: dict):
                 if is_diffusion:
                     x_past = x_d[:, :-fh, :]
 
-                    if cfg['model_name'] in ['decoder_only_ssm', 'decoder_only_lstm']:
+                    if cfg['model_name'] in ['decoder_only_ssm', 'decoder_only_lstm', 'decoder_only_lstm_fast']:
                         future_prec = x_d[:, -fh+1:, :]
                     else:
                         future_prec = x_d[:, -fh:, :]
 
-                    if (not cfg['no_static']) and cfg['concat_static'] and cfg['model_name'] not in ['decoder_only_ssm', 'decoder_only_lstm']:
+                    if (not cfg['no_static']) and cfg['concat_static'] and cfg['model_name'] not in ['decoder_only_ssm', 'decoder_only_lstm', 'decoder_only_lstm_fast']:
                         stat_p = static_attrs.unsqueeze(1).repeat(1, x_past.size(1), 1)
                         x_past = torch.cat([x_past, stat_p], dim=-1)
 
@@ -500,7 +513,7 @@ def evaluate(cfg: dict):
                         and not profile_runtime
                     )
                     use_lstm_cache = (
-                        cfg["model_name"] == "decoder_only_lstm"
+                        cfg["model_name"] in ["decoder_only_lstm", "decoder_only_lstm_fast"]
                         and hasattr(model, "encode_past_lstm")
                         and not profile_runtime
                     )
