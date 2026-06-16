@@ -39,6 +39,7 @@ from papercode.backbones.ssm_v1 import ssm_v1
 from papercode.backbones.ssm_v2 import ssm_v2
 from papercode.backbones.ssm_encoder import ssm_encoder
 from papercode.decoder_only_ssm import decoder_only_ssm
+from papercode.decoder_only_ssm_hybrid import decoder_only_ssm as decoder_only_ssm_hybrid
 
 
 
@@ -141,7 +142,7 @@ def evaluate(cfg: dict):
         return np.load(cache, allow_pickle=True)
 
     # --- build model ---
-    is_diffusion = (cfg["model_name"] in ["diffusion_lstm", "diffusion_unet", "diffusion_ssm", "decoder_only_ssm", "decoder_only_lstm", "diffusion_ssm_unet", "diffusion_ssm_lstm"])
+    is_diffusion = (cfg["model_name"] in ["diffusion_lstm", "diffusion_unet", "diffusion_ssm", "decoder_only_ssm", "decoder_only_ssm_hybrid", "decoder_only_lstm", "diffusion_ssm_unet", "diffusion_ssm_lstm"])
     if is_diffusion:
         if cfg['forcing_source'] == 'all':
             dyn_in = 15 # depend on whether it's multisources. If single source, set it to 5. 
@@ -252,17 +253,30 @@ def evaluate(cfg: dict):
             
         elif cfg['model_name'] == 'decoder_only_ssm':
             model = decoder_only_ssm(
-                d_input      = in_size_dyn, 
-                d_model      = cfg['d_model'],    
-                n_layers     = cfg['n_layers'],   
-                cfg          = cfg,    
+                d_input      = in_size_dyn,
+                d_model      = cfg['d_model'],
+                n_layers     = cfg['n_layers'],
+                cfg          = cfg,
                 horizon      = cfg['forecast_horizon'],
                 time_emb_dim = cfg['time_emb_dim'],
                 static_dim   = cfg.get('static_dim', 27),
                 dropout      = cfg['ssm_dropout'],
                 time_full    = True
             ).to(cfg['DEVICE'])
-            
+
+        elif cfg['model_name'] == 'decoder_only_ssm_hybrid':
+            model = decoder_only_ssm_hybrid(
+                d_input      = in_size_dyn,
+                d_model      = cfg['d_model'],
+                n_layers     = cfg['n_layers'],
+                cfg          = cfg,
+                horizon      = cfg['forecast_horizon'],
+                time_emb_dim = cfg['time_emb_dim'],
+                static_dim   = cfg.get('static_dim', 27),
+                dropout      = cfg['ssm_dropout'],
+                time_full    = True
+            ).to(cfg['DEVICE'])
+
         elif cfg['model_name'] == 'decoder_only_lstm':
             model = decoder_only_lstm(
                 d_input      = in_size_dyn,   
@@ -452,12 +466,12 @@ def evaluate(cfg: dict):
                     x_past = x_d[:, :-fh, :]
                     
                     # forcing choice
-                    if cfg['model_name'] in ['decoder_only_ssm','decoder_only_lstm']:
+                    if cfg['model_name'] in ['decoder_only_ssm', 'decoder_only_ssm_hybrid', 'decoder_only_lstm']:
                         future_prec = x_d[:, -fh+1:, :]
                     else:
                         future_prec = x_d[:, -fh:, :]
-                        
-                    if (not cfg['no_static']) and cfg['concat_static'] and cfg['model_name'] not in ['decoder_only_ssm', 'decoder_only_lstm']:
+
+                    if (not cfg['no_static']) and cfg['concat_static'] and cfg['model_name'] not in ['decoder_only_ssm', 'decoder_only_ssm_hybrid', 'decoder_only_lstm']:
                         stat_p = static_attrs.unsqueeze(1).repeat(1, x_past.size(1), 1)  # [batch, seq_len, 27]
                         x_past = torch.cat([x_past, stat_p], dim=-1)
                     stat_f = static_attrs.unsqueeze(1).repeat(1, future_prec.size(1), 1)
@@ -469,15 +483,30 @@ def evaluate(cfg: dict):
                     
                     # wrappers built-in sampler
                     ens = []
-                    for _ in range(cfg.get("num_samples",50)):
-                        samp = model.sample_ddim(
-                            x_past      = x_past,
-                            static_attributes = stat_f, 
-                            future_pcp  = future_prec,
-                            num_steps   = cfg.get("ddim_steps"),
-                            eta         = 0.0
-                        )  # returns (B, H)
-                        ens.append(samp)
+                    if cfg['model_name'] == 'decoder_only_ssm_hybrid':
+                        past_cache = model.encode_past_hybrid(
+                            x_past=x_past, x_future=future_prec, static_attr=stat_f
+                        )
+                        for _ in range(cfg.get("num_samples", 50)):
+                            samp = model.sample_ddim_hybrid(
+                                x_past            = x_past,
+                                static_attributes = stat_f,
+                                future_pcp        = future_prec,
+                                num_steps         = cfg.get("ddim_steps"),
+                                eta               = 0.0,
+                                past_hybrid_cache = past_cache
+                            )
+                            ens.append(samp)
+                    else:
+                        for _ in range(cfg.get("num_samples",50)):
+                            samp = model.sample_ddim(
+                                x_past      = x_past,
+                                static_attributes = stat_f,
+                                future_pcp  = future_prec,
+                                num_steps   = cfg.get("ddim_steps"),
+                                eta         = 0.0
+                            )  # returns (B, H)
+                            ens.append(samp)
                     ens  = torch.stack(ens, dim=0)    # (S,B,H)
                     ens_d= denorm(ens)                # de-norm,todo! 
                     #ens_d=ens
