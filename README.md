@@ -1,10 +1,8 @@
-# HydroDiffusion: A Diffusion-Based State Space Model for Probabilistic Streamflow Forecasting
+# HydroDiffusion: Diffusion-Based Probabilistic Streamflow Forecasting with a State Space Backbone
 
 ---
 
 **HydroDiffusion** is a **score-based diffusion model** built upon a **State Space Model (SSM)** backbone ([S4D-FT](https://doi.org/10.1029/2025WR039888)) for **probabilistic streamflow forecasting**.  
-It performs joint denoising over a 7-day forecast horizon, producing temporally coherent ensemble predictions across large-scale basins.
-
 
 This repository contains:
 - Training and evaluation pipelines for HydroDiffusion and baseline models (DiffusionLSTM, LSTM, SSM).  
