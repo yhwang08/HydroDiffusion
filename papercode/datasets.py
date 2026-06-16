@@ -6,7 +6,6 @@ import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
-import pdb
 import sqlite3
 
 from .datautils import (
@@ -202,6 +201,7 @@ class CamelsH5(Dataset):
                 raw = [b.decode("ascii") for b in f["sample_2_basin"][:]]
             self.valid_idx   = [i for i, b in enumerate(raw) if b in basins]
             self.num_samples = len(self.valid_idx)
+            self._h5         = None  # opened lazily per worker process
 
     # ------------------------------------------------------------------
     # helper that actually loads h5 into numpy arrays (only if cache=True)
@@ -216,6 +216,11 @@ class CamelsH5(Dataset):
             dates   = ([d.decode("ascii") for d in f["dates"][:]]
                        if (self.include_dates and "dates" in f) else None)
         return x, y, basins, q_mean, q_std, dates
+
+    def _get_h5(self):
+        if self._h5 is None:
+            self._h5 = h5py.File(self.h5_file, "r")
+        return self._h5
 
     # ------------------------------------------------------------------
     # attribute loader
@@ -263,14 +268,14 @@ class CamelsH5(Dataset):
             date    = self.dates[idx] if self.include_dates else ""
         else:
             file_idx = self.valid_idx[idx]
-            with h5py.File(self.h5_file, "r") as f:
-                x      = f["input_data"][file_idx]
-                y      = f["target_data"][file_idx]
-                basin  = f["sample_2_basin"][file_idx].decode("ascii")
-                q_mean = f["q_means"][file_idx]
-                q_std  = f["q_stds"][file_idx]
-                date   = (f["dates"][file_idx].decode("ascii")
-                          if (self.include_dates and "dates" in f) else "")
+            f        = self._get_h5()
+            x        = f["input_data"][file_idx]
+            y        = f["target_data"][file_idx]
+            basin    = f["sample_2_basin"][file_idx].decode("ascii")
+            q_mean   = f["q_means"][file_idx]
+            q_std    = f["q_stds"][file_idx]
+            date     = (f["dates"][file_idx].decode("ascii")
+                        if (self.include_dates and "dates" in f) else "")
 
         # ---------- optional re-normalisation ----------
         if not self.is_normalized:

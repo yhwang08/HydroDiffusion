@@ -41,7 +41,6 @@ from papercode.backbones.ssm_v1 import ssm_v1
 from papercode.backbones.ssm_v2 import ssm_v2
 from papercode.backbones.ssm_encoder import ssm_encoder
 from papercode.decoder_only_ssm import decoder_only_ssm # diffusion
-from papercode.decoder_only_ssm_hybrid import decoder_only_ssm as decoder_only_ssm_hybrid
 from papercode.seq2seq_ssm import seq2seq_ssm # deterministic
 
 
@@ -216,7 +215,7 @@ def train(cfg):
         loss_log = {"train_loss": [], "val_loss": []}
     
         for epoch in range(1, cfg['epochs'] + 1):
-            if cfg['model_name'] in ['diffusion_lstm', 'diffusion_unet', 'diffusion_ssm', 'decoder_only_ssm', 'decoder_only_ssm_hybrid', 'decoder_only_lstm', 'diffusion_ssm_unet', 'diffusion_ssm_lstm']:
+            if cfg['model_name'] in ['diffusion_lstm', 'diffusion_unet', 'diffusion_ssm', 'decoder_only_ssm', 'decoder_only_lstm', 'diffusion_ssm_unet', 'diffusion_ssm_lstm']:
                 train_loss = train_diffusion_epoch(cfg, model, optimizer, scheduler, train_loader, epoch, ema)
             elif cfg['model_name'] in ['seq2seq_ssm', 'seq2seq_lstm', 'encdec_lstm']:
                 if cfg['model_name'] == 'seq2seq_ssm':
@@ -239,7 +238,7 @@ def train(cfg):
             torch.save(state, cfg['run_dir'] / f"model_epoch{epoch}.pt")
     
             if epoch % 1 == 0 or epoch == cfg['epochs']:    
-                if cfg['model_name'] in ['diffusion_lstm', 'diffusion_unet', 'diffusion_ssm', 'decoder_only_ssm', 'decoder_only_ssm_hybrid', 'decoder_only_lstm', 'diffusion_ssm_unet', 'diffusion_ssm_lstm']:
+                if cfg['model_name'] in ['diffusion_lstm', 'diffusion_unet', 'diffusion_ssm', 'decoder_only_ssm', 'decoder_only_lstm', 'diffusion_ssm_unet', 'diffusion_ssm_lstm']:
                     val_loss = validate_diffusion_epoch(cfg, model, val_loader, epoch, ema)
                 else:
                     val_loss = validate_epoch(cfg, model, val_loader, loss_fn, epoch, ema)
@@ -306,7 +305,7 @@ def train_diffusion_epoch(cfg, model, optimizer, scheduler, loader, epoch, ema):
 
         x_past = x_d[:, :-fh, :]
         
-        if cfg['model_name'] in ['decoder_only_ssm', 'decoder_only_ssm_hybrid', 'decoder_only_lstm']:
+        if cfg['model_name'] in ['decoder_only_ssm','decoder_only_lstm']:
             future_precip = x_d[:, -fh+1:, :]
         else:
             future_precip = x_d[:, -fh:, :]
@@ -316,7 +315,7 @@ def train_diffusion_epoch(cfg, model, optimizer, scheduler, loader, epoch, ema):
         #y_norm = y_norm[:,1:]
         # ======================================= 
 
-        if (not cfg['no_static']) and cfg['concat_static'] and cfg['model_name'] not in ['decoder_only_ssm', 'decoder_only_ssm_hybrid', 'decoder_only_lstm']:
+        if (not cfg['no_static']) and cfg['concat_static'] and cfg['model_name'] not in ['decoder_only_ssm','decoder_only_lstm']:
             stat_p = static_attrs.expand(-1, x_past.size(1), static_attrs.size(-1))  # [batch, seq_len, 27]
             #stat_f = static_attrs.repeat(1, future_precip.size(1), 1)
             x_past = torch.cat([x_past, stat_p], dim=-1)
@@ -344,6 +343,16 @@ def train_diffusion_epoch(cfg, model, optimizer, scheduler, loader, epoch, ema):
         torch.nn.utils.clip_grad_norm_(model.parameters(), cfg['clip_value'])
         
         optimizer.step()
+        
+        '''
+        for blk in model.blocks:
+            blk.invalidate_kernel_cache()
+        '''
+        
+        for module in model.modules():
+            if hasattr(module, "invalidate_kernel_cache"):
+                module.invalidate_kernel_cache()
+
         scheduler.step() 
         
         ema.update()
@@ -406,7 +415,7 @@ def validate_diffusion_epoch(cfg, model, loader, epoch, ema):
             #y_norm = y_norm[:,1:]
             # ======================================= 
                 
-            if (not cfg['no_static']) and cfg['concat_static'] and cfg['model_name'] not in ['decoder_only_ssm', 'decoder_only_ssm_hybrid', 'decoder_only_lstm']:
+            if (not cfg['no_static']) and cfg['concat_static'] and cfg['model_name'] not in ['decoder_only_ssm','decoder_only_lstm']:
                 stat_p = static_attrs.expand(-1, x_past.size(1), static_attrs.size(-1))  # [batch, seq_len, 27]
                 x_past = torch.cat([x_past, stat_p], dim=-1)
             stat_f = static_attrs.repeat(1, future_precip.size(1), 1)
@@ -428,10 +437,10 @@ def validate_diffusion_epoch(cfg, model, loader, epoch, ema):
             v_target = alpha * eps - sigma * y_norm
             v_target = v_target.unsqueeze(-1)
             
-            if cfg.get('predict_mode','velocity') == 'velocity':
-                target = v_target
-            else:
-                target = eps.unsqueeze(-1)
+            #if cfg.get('predict_mode','velocity') == 'velocity':
+            target = v_target
+            #else:
+            #target = eps.unsqueeze(-1)
         
             loss = F.mse_loss(out, target)
     
@@ -533,6 +542,11 @@ def train_epoch(cfg, model, optimizer, scheduler, loss_fn, loader, epoch, ema):
         if cfg['clip_norm']:
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg['clip_value'])
         optimizer.step()
+        
+        '''
+        for blk in model.blocks:
+            blk.invalidate_kernel_cache()
+        '''
         
         if cfg['model_name'] in ['seq2seq_ssm']:
             scheduler.step() # per-batch scheduler
@@ -757,7 +771,7 @@ def _build_model(cfg: Dict):
             static_dim = cfg.get('static_dim', 27),
             dropout    = cfg['ssm_dropout'],
             pool_type  = cfg['pool_type'],
-            horizon = cfg['forecast_horizon'] # todo, test without nowcast!
+            horizon = cfg['forecast_horizon']
         )
         
         decoder = ssm_v2(
@@ -785,10 +799,10 @@ def _build_model(cfg: Dict):
         
     elif cfg['model_name'] == 'decoder_only_ssm':
         model = decoder_only_ssm(
-            d_input      = input_size_dyn,
-            d_model      = cfg['d_model'],
-            n_layers     = cfg['n_layers'],
-            cfg          = cfg,
+            d_input      = input_size_dyn, 
+            d_model      = cfg['d_model'],       
+            n_layers     = cfg['n_layers'],      
+            cfg          = cfg,                  # lr, d_state, dt_min, etc.
             horizon      = cfg['forecast_horizon'],
             time_emb_dim = cfg['time_emb_dim'],
             static_dim   = cfg.get('static_dim', 27),
@@ -796,21 +810,7 @@ def _build_model(cfg: Dict):
             time_full    = True
         ).to(cfg['DEVICE'])
         return model
-
-    elif cfg['model_name'] == 'decoder_only_ssm_hybrid':
-        model = decoder_only_ssm_hybrid(
-            d_input      = input_size_dyn,
-            d_model      = cfg['d_model'],
-            n_layers     = cfg['n_layers'],
-            cfg          = cfg,
-            horizon      = cfg['forecast_horizon'],
-            time_emb_dim = cfg['time_emb_dim'],
-            static_dim   = cfg.get('static_dim', 27),
-            dropout      = cfg['ssm_dropout'],
-            time_full    = True
-        ).to(cfg['DEVICE'])
-        return model
-
+        
     elif cfg['model_name'] == 'decoder_only_lstm':
         model = decoder_only_lstm(
             d_input      = input_size_dyn, 

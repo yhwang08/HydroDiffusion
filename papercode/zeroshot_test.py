@@ -3,12 +3,13 @@
 # Produces per-basin CSV (ensemble mean) + a global NPZ with full ensemble cube (N,S,H).
 
 '''
-python -m papercode.zeroshot_test --gpu 6 \
-  --model_ckpt /data/home/yihan/diffusion_ssm/runs/run_2507_2120_seed3407/best_model.pt \
-  --note gefs_zts
+python -m papercode.zeroshot_test \
+  --model_ckpt /data/home/yihan/diffusion_ssm/runs/run_2204_0533_seed3407/model_epoch60.pt \
+  --ddpm_train_steps 1000 \
+  --ddim_steps 10 \
+  --note gefs_zst_ddpmtrain_ddim10
 '''
 
-# papercode/zeroshot_eval_gefs.py
 # Batched, vectorized zero-shot evaluation with GEFS forcings.
 # Produces per-basin CSV (ensemble mean) + a global NPZ with full ensemble cube (N,S,H).
 
@@ -52,7 +53,10 @@ from papercode.datautils import (
     load_forcing_multi, load_scalar, normalize_multi_features, load_discharge
 )
 from papercode.utils import get_basin_list
-from papercode.encoder_only_ssm import encoder_only_ssm
+
+# Import is deferred to after argument parsing so --ssm_backend controls which
+# version is loaded. Default is 'hybrid' (fastest); pass --ssm_backend fast to
+# use the FFT-only version from decoder_only_ssm_fast.
 
 # --------------------------- logging -----------------------------------------
 def setup_logging(log_dir: str, note: str, level: str) -> Path:
@@ -113,7 +117,7 @@ def build_argparser():
 
     # ensemble sampling (diffusion)
     p.add_argument("--num_samples",  type=int, default=50)
-    p.add_argument("--ddim_steps",   type=int, default=10)
+    p.add_argument("--ddim_steps",   type=int, default=10) # todo
     p.add_argument("--eta",          type=float, default=0.0)
 
     # model cfg that must match training
@@ -146,6 +150,17 @@ def build_argparser():
     # basin selection
     p.add_argument("--basins",       type=str, default=None,
                    help="Optional text file (one basin per line) or comma list")
+                   
+    # sampling for ddpm trained model
+    p.add_argument('--ddpm_train_steps', type=int, default=None,
+               help='If set, uses DDPM linear beta schedule at sampling time (for DDPM-trained models)')
+    p.add_argument('--ddpm_beta_start', type=float, default=1e-4)
+    p.add_argument('--ddpm_beta_end',   type=float, default=2e-2)
+
+    p.add_argument('--ssm_backend', type=str, default='hybrid',
+                   choices=['hybrid', 'fast'],
+                   help='"hybrid" = FFT encode + recurrent decode (fastest); '
+                        '"fast"   = FFT encode + FFT decode (decoder_only_ssm_fast)')
     return p
 
 # --------------------------- helpers -----------------------------------------
@@ -254,10 +269,10 @@ def assert_alignment(gefs_df: pd.DataFrame, df15: pd.DataFrame, one_init: pd.Tim
     fut_dates = g['valid_time'].dt.normalize().tolist()
     exp_fut   = [D + pd.Timedelta(days=k) for k in range(1, 8)]  # D+1..D+7
 
-    print("\n[ALIGNMENT CHECK]")
-    print("init_time:", one_init)
-    print("GEFS valid_time (leads 1..7):", fut_dates)
-    print("Expected D+1..D+7:           ", exp_fut)
+    #print("\n[ALIGNMENT CHECK]")
+    #print("init_time:", one_init)
+    #print("GEFS valid_time (leads 1..7):", fut_dates)
+    #print("Expected D+1..D+7:           ", exp_fut)
 
     # Past window (inclusive) D-364..D
     start = D - pd.Timedelta(days=364)
@@ -364,7 +379,7 @@ def build_model(cfg: Dict) -> torch.nn.Module:
     cfg = ensure_cfg_defaults(cfg)
     dyn_in = 5 if cfg['forcing_source'] != 'all' else 15
     input_size_dyn = dyn_in if (cfg['no_static'] or not cfg['concat_static']) else (32 if dyn_in==5 else 42)
-    m = encoder_only_ssm(
+    m = decoder_only_ssm(
         d_input      = input_size_dyn,
         d_model      = cfg['d_model'],
         n_layers     = cfg['n_layers'],
@@ -441,7 +456,8 @@ def build_batched_inputs_for_basin(
         
         else:
             # Single-source path: normalize 5 GEFS variables with **GEFS stats**
-            fut_n = _normalize_5_gefs(Xg5, GEFS_SCALAR).astype(np.float32)   # (7,5)
+            fut_n = _normalize_5_gefs(Xg5, GEFS_SCALAR).astype(np.float32)   # (7,5) # todo, normalize with gefs stats
+            #fut_n = _normalize_5(Xg5, forcing_source, scalar).astype(np.float32) # normalize with daymet states, should not do that
 
 
         all_fut.append(fut_n.astype(np.float32))
@@ -539,15 +555,26 @@ def run_basin_batched(
         xs = x_past_all[s:e].float()
         fs = future_all[s:e].float()
         st = static_all[s:e].float()
-        # ensemble sampling vectorized over batch
+        # encode past ONCE and reuse across all ensemble members
+        with torch.no_grad():
+            past_cache = getattr(model, _encode_past)(xs, fs, st)
+
         samp_acc = []
         for _ in range(num_samples):
-            y_norm = model.sample_ddim(xs, st, fs, num_steps=ddim_steps, eta=eta)  # (b,H), float32
+            y_norm = getattr(model, _sample_ddim)(
+                            xs, st, fs,
+                            num_steps=ddim_steps,
+                            eta=eta,
+                            ddpm_n_steps=args.ddpm_train_steps,
+                            ddpm_beta_start=args.ddpm_beta_start,
+                            ddpm_beta_end=args.ddpm_beta_end,
+                            **{_cache_kwarg: past_cache},
+                        )  # (b,H), float32
             y = _denorm_q(y_norm.detach().cpu().numpy(), scalar)                   # (b,H) float32
             samp_acc.append(y.astype(np.float32))
         S = np.stack(samp_acc, axis=1)   # (b,S,H) float32
         ens_out[s:e, :, :] = S
-
+    ''' old code block. 1 observation only. Now returns 8 obs cols with corresponding to lead time.
     # Build output mean dataframe & obs vector
     means = ens_out.mean(axis=1)         # (B,H)
     obs = []
@@ -559,11 +586,48 @@ def run_basin_batched(
         rows.append({"init_time": t0, "obs": float(obs_val), **{f"lead{k}": float(means[i, k]) for k in range(H)}})
     df_mean = pd.DataFrame(rows).sort_values("init_time").reset_index(drop=True)
     return df_mean, ens_out, inits, np.array(obs, dtype=np.float32)
+    '''
+    means = ens_out.mean(axis=1)  # (B, H)
+    obs = []
+    rows = []
+    
+    for i, t0 in enumerate(inits):
+        d0 = pd.Timestamp(t0.date())
+    
+        obs_row = []
+        for k in range(H):
+            dk = d0 + pd.Timedelta(days=k)
+            obs_row.append(float(q_obs_series.loc[dk]) if dk in q_obs_series.index else np.nan)
+    
+        obs.append(obs_row)
+    
+        row = {
+            "init_time": t0,
+            **{f"obs_lead{k}": obs_row[k] for k in range(H)},
+            **{f"lead{k}": float(means[i, k]) for k in range(H)}
+        }
+        rows.append(row)
+    
+    df_mean = pd.DataFrame(rows).sort_values("init_time").reset_index(drop=True)
+    
+    # obs shape: (M, H)
+    return df_mean, ens_out, inits, np.array(obs, dtype=np.float32)
 
 # --------------------------- MAIN --------------------------------------------
 
 ap = build_argparser()
 args = ap.parse_args()
+
+if args.ssm_backend == 'hybrid':
+    from papercode.decoder_only_ssm_hybrid import decoder_only_ssm
+    _encode_past  = 'encode_past_hybrid'
+    _sample_ddim  = 'sample_ddim_hybrid'
+    _cache_kwarg  = 'past_hybrid_cache'
+else:
+    from papercode.decoder_only_ssm_fast import decoder_only_ssm
+    _encode_past  = 'encode_past_fft'
+    _sample_ddim  = 'sample_ddim_fast_fft'
+    _cache_kwarg  = 'past_fft_cache'
 
 log_path = setup_logging(args.log_dir, args.note, args.log_level)
 logging.info(f"Logging to {log_path}")
@@ -582,7 +646,7 @@ logging.info(f"PyTorch: {torch.__version__}")
 # Build CFG to match training (and ensure all keys exist)
 CFG: Dict = {
     "DEVICE": device,
-    "model_name": "encoder_only_ssm",
+    "model_name": "decoder_only_ssm",
     "forecast_horizon": args.horizon,
     "d_model": args.d_model,
     "d_state": args.d_state,
@@ -603,9 +667,12 @@ CFG: Dict = {
 }
 for k, v in CFG.items():
     logging.info(f"{k}: {v if k!='DEVICE' else device.type}")
+logging.info(f"DDIM sampling steps: {args.ddim_steps}")
+logging.info(f"Number of ensemble samples: {args.num_samples}")
+logging.info(f"DDIM eta: {args.eta}")
 
 out_root = Path(args.out_dir); out_root.mkdir(parents=True, exist_ok=True)
-per_basin_dir = out_root / "per_basin_csv"; per_basin_dir.mkdir(parents=True, exist_ok=True)
+per_basin_dir = out_root / "per_basin_csv_ddim10_optim_hybrid"; per_basin_dir.mkdir(parents=True, exist_ok=True) # todo
 
 # build & load model
 model = build_model(CFG)
@@ -636,7 +703,8 @@ logging.info(f"GEFS scalar loaded: {GEFS_SCALAR}")
 # global collectors
 G_ens: List[np.ndarray] = []
 G_dates: List[pd.Timestamp] = []
-G_obs:   List[float] = []
+#G_obs:   List[float] = [] # old code
+G_obs:   List[List[float]] = []
 G_bas:   List[str] = []
 
 ok=skip=fail=0
@@ -644,6 +712,13 @@ t_all0 = time.time()
 
 for i, b in enumerate(basins, 1):
     t0 = time.time()
+    out_csv = per_basin_dir / f"{b}_preds.csv"
+
+    if out_csv.exists():
+        logging.info(f"[{i}/{len(basins)}] Basin {b} ... SKIP: file already exists -> {out_csv}")
+        skip += 1
+        continue
+
     logging.info(f"[{i}/{len(basins)}] Basin {b} ...")
     gefs_path = Path(args.gefs_dir) / f"{b}.txt"
     if not gefs_path.exists():
@@ -658,12 +733,13 @@ for i, b in enumerate(basins, 1):
             logging.info(f"[{b}] No init rows after filters.")
             skip += 1
             continue
+
         # Optional: alignment print for the first available init in this basin
         try:
             first_init = df['init_time'].sort_values().iloc[0]
             df15, _ = load_forcing_multi(Path(args.camels_root), b)
             assert_alignment(df, df15, first_init)
-            
+
         except Exception as _e:
             logging.warning(f"[{b}] alignment check skipped: {_e}")
 
@@ -694,18 +770,17 @@ for i, b in enumerate(basins, 1):
         continue
 
     # save per-basin CSV (ensemble mean)
-    out_csv = per_basin_dir / f"{b}_preds.csv"
     df_mean.to_csv(out_csv, index=False)
     dt = time.time() - t0
     ms_per_init = 1000.0 * dt / len(df_mean)
-    logging.info(f"[{b}] OK: {len(df_mean)} inits ? {out_csv}  "
+    logging.info(f"[{b}] OK: {len(df_mean)} inits -> {out_csv}  "
                  f"time={dt:.1f}s  ({ms_per_init:.1f} ms/init)")
 
     # global accumulators
     G_ens.append(ens_cube)               # (M,S,H)
     G_dates.extend(inits)                # M
     G_obs.extend(obs_vec.tolist())       # M
-    G_bas.extend([b]*len(inits))
+    G_bas.extend([b] * len(inits))
     ok += 1
 
 # save global NPZ

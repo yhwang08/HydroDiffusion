@@ -9,6 +9,13 @@ from performance_functions import (
     kge, stdev_rat, zero_freq, FHV, FLV, mass_balance
 )
 
+'''
+python main_performance_full_evaluation.py diffusionlstm_ddim10_rerun /data/home/yihan/diffusion_ssm/runs/run_2207_1832_seed3407/ensembles_epochbest_ddim10.npz
+python main_performance_full_evaluation.py hydrodiffusion_ddimpmtrain_ddim10 /data/rdl/yihan/diffusion_ssm/runs/run_2204_0533_seed3407/ensembles_epoch60_ddim10.npz
+python main_performance_full_evaluation.py hydrodiffusion_ddpmtrain1000_optim_fixed /data/rdl/yihan/diffusion_ssm/runs/run_1605_0026_seed34/ensembles_epoch60_ddim10_optim_fixed.npz
+python main_performance_full_evaluation.py decoder_only_lstm_fast /data/home/yihan/diffusion_ssm/runs/run_1509_0214_seed3407/ensembles_epochbest_ddim10.npz
+'''
+
 # ============================================================
 # Probabilistic helper functions
 # ============================================================
@@ -76,6 +83,7 @@ def main():
     if len(sys.argv) < 3:
         print("Usage: python main_performance_full_evaluation.py <experiment_name> <npz_path>")
         # A det example: python main_performance_full_evaluation.py seq2seq_ssm /home/yihan/diffusion_ssm/runs/run_2910_1858_seed3407/deterministic_epoch49.npz
+        # HydroDiffusion: python main_performance_full_evaluation.py hydrodiffusion_ddim3 /home/yihan/diffusion_ssm/runs/run_2507_2120_seed3407/ensembles_epoch60_ddim3.npz
 
         sys.exit(1)
 
@@ -90,12 +98,73 @@ def main():
     keys = list(f.keys())
     print(f"[INFO] Found keys: {keys}")
     basins = f["basins"]
-    dates  = f["dates"]
+    dates  = pd.to_datetime(f["dates"])
     obs    = f["obs"]
+    
     if "preds" in keys:
-      ens = f["preds"]
+        ens = f["preds"]
     elif "ens" in keys:
-      ens    = f["ens"]
+        ens = f["ens"]
+    else:
+        raise KeyError("NPZ must contain either 'preds' or 'ens'.")
+    
+    # Detect deterministic vs probabilistic
+    # Deterministic = ens.ndim == 2 (N,H)
+    deterministic = (ens.ndim == 2)
+    print(f"[INFO] Detected {'deterministic' if deterministic else 'ensemble'} npz")
+    
+    if deterministic:
+        # reshape to (N,1,H) for uniform handling
+        ens = ens[:, None, :]
+    
+    N, S, H = ens.shape
+    
+    # ============================================================
+    # Observation layout check
+    # ============================================================
+    print("=" * 70)
+    print("[OBS ALIGNMENT CHECK]")
+    print(f"  basins shape : {basins.shape}")
+    print(f"  dates shape  : {dates.shape}")
+    print(f"  obs shape    : {obs.shape}")
+    print(f"  ens shape    : {ens.shape}")
+    
+    if obs.ndim == 2 and obs.shape == (N, H):
+        OBS_MODE = "obs8"
+        print("  OBS_MODE     : obs8 / lead-aligned observations")
+        print("  Interpretation:")
+        print("    obs[n, 0] = Q(init_date[n] + 0 days)")
+        print("    obs[n, 1] = Q(init_date[n] + 1 day)")
+        print("    ...")
+        print(f"    obs[n, {H-1}] = Q(init_date[n] + {H-1} days)")
+        print("  Lead-time metrics will use obs[idx, lead-1].")
+    elif obs.ndim == 1 and obs.shape[0] == N:
+        OBS_MODE = "obs1"
+        print("  OBS_MODE     : obs1 / init-date-only observations")
+        print("  Interpretation:")
+        print("    obs[n] = Q(init_date[n]) only")
+        print("  WARNING:")
+        print("    This current code does NOT reconstruct Q(init_date + lead).")
+        print("    Therefore lead > 0 metrics are NOT lead-time aligned unless you revise the obs lookup logic.")
+    else:
+        raise ValueError(
+            f"Unsupported obs shape {obs.shape}. Expected (N,H)=({N},{H}) for obs8 "
+            f"or (N,)={N} for obs1."
+        )
+    
+    # Optional: show quick sample for sanity
+    print("  Sample dates:")
+    for i in range(min(3, N)):
+        if OBS_MODE == "obs8":
+            print(
+                f"    row {i}: basin={basins[i]}, init={dates[i]}, "
+                f"obs_lead0={obs[i,0]}, obs_lead{H-1}={obs[i,H-1]}"
+            )
+        else:
+            print(
+                f"    row {i}: basin={basins[i]}, init={dates[i]}, obs_init={obs[i]}"
+            )
+    print("=" * 70)
 
     # Detect deterministic vs probabilistic
     # Deterministic = ens.ndim == 2 (N,H)

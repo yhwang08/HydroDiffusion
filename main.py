@@ -64,7 +64,7 @@ def get_args() -> Dict:
     parser = argparse.ArgumentParser()
     parser.add_argument('mode', choices=["train", "evaluate"])
     parser.add_argument('--camels_root', type=str, default='/data/rdl/yihan/data/basin_dataset_public_v1p2/')
-    parser.add_argument('--seed', type=int, default=5534)
+    parser.add_argument('--seed', type=int, default=3407)
     parser.add_argument('--run_dir', type=str)
     parser.add_argument('--gpu', type=int, default=-1)
     parser.add_argument('--cache_data', type=str2bool, default=True)
@@ -86,13 +86,30 @@ def get_args() -> Dict:
     
     parser.add_argument('--forcing_source', type=str, default="daymet")
     parser.add_argument('--num_samples', type=int, default=50, help='Number of samples to draw during diffusion sampling')
+    parser.add_argument('--train_mode', type=str, default='ddim',
+                        choices=['ddim', 'ddpm'],
+                        help='Training schedule: "ddim" for continuous cosine-logSNR (train_generic.py), '
+                             '"ddpm" for discrete linear-beta (train_ddpm.py)')
     parser.add_argument('--predict_mode', type=str, default="velocity",
                         choices=["noise", "velocity"],
                         help='Prediction mode for the diffusion model: "noise" for standard noise prediction or "velocity" for velocity prediction.')
     parser.add_argument('--time_emb_dim', type=int, default=256)
+    parser.add_argument('--use_amp', type=str2bool, default=True)
     # === DDIM-related arguments ===
-    parser.add_argument('--ddim_steps', type=int, default=3,
+    parser.add_argument('--ddim_steps', type=int, default=10,
                         help='Number of reverse steps to use for DDIM sampling')
+                        
+    # === DDPM training related arguments === 
+    parser.add_argument('--ddpm_train_steps', type=int, default=None,
+                    help='Number of discrete diffusion training steps for DDPM-style training')
+    parser.add_argument('--ddpm_beta_start', type=float, default=1e-4,
+                        help='Starting beta for DDPM linear schedule')
+    parser.add_argument('--ddpm_beta_end', type=float, default=2e-2,
+                        help='Ending beta for DDPM linear schedule')
+    parser.add_argument('--ddpm_schedule', type=str, default='linear',
+                        choices=['linear', 'cosine'],
+                        help='Discrete DDPM noise schedule')
+
                         
     #====================================#
     # Argument for SSM    
@@ -127,19 +144,28 @@ def get_args() -> Dict:
     parser.add_argument('--model', type=str, default='s4d', metavar='N', help='model name')
     parser.add_argument('--pool_type', type=str, default='power') # 'avg', 'power', or 'attn'
     #====================================#
+    
+    # -- Profiling ----------------------------------------------------------
+    parser.add_argument('--profile_runtime',     type=str2bool, default=False)
+    parser.add_argument('--profile_max_batches', type=int,      default=10)
+    parser.add_argument('--profile_num_samples', type=int,      default=1)
+    parser.add_argument('--profile_csv_name',    type=str,      default=None)
 
     cfg = vars(parser.parse_args())
 
     if cfg["mode"] in ["evaluate"] and cfg["run_dir"] is None:
         raise ValueError("In evaluation mode, --run_dir must be specified.")
 
+    # Set device
     device = f"cuda:{cfg['gpu']}" if cfg["gpu"] >= 0 else "cpu"
     global DEVICE
     DEVICE = torch.device(device if torch.cuda.is_available() else "cpu")
     cfg["DEVICE"] = DEVICE
 
+    # Merge global defaults
     cfg.update(GLOBAL_SETTINGS)
 
+    # Convert paths
     if cfg["camels_root"] is not None:
         cfg["camels_root"] = Path(cfg["camels_root"])
     if cfg["run_dir"] is not None:
@@ -151,7 +177,10 @@ def get_args() -> Dict:
 def main():
     cfg = get_args()
     if cfg["mode"] == "train":
-        from papercode.train_generic import train
+        if cfg["train_mode"] == "ddpm":
+            from papercode.train_ddpm import train
+        else:
+            from papercode.train_generic import train
         train(cfg)
 
     elif cfg["mode"] == "evaluate":

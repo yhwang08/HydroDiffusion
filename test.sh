@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Usage: ./test.sh <model> <static|no_static> [gpu] [run_dir] [note]
-#   model : seq2seq_lstm | encdec_lstm | seq2seq_ssm | diffusion_lstm | diffusion_unet | decoder_only_ssm | decoder_only_ssm_hybrid
+#   model : seq2seq_lstm | encdec_lstm | seq2seq_ssm | diffusion_lstm | diffusion_unet | diffusion_ssm
 #   flag  : static | no_static
 #   gpu   : CUDA device ID (default 0)
 #   run_dir: the running directory
@@ -41,6 +41,12 @@ for (( seed=firstseed; seed<firstseed+nseeds; seed++ )); do
 
   if [[ "$model" == "decoder_only_ssm" ]]; then
     # ---------------------------- SSM branch ---------------------------------
+    # Optional DDPM args:
+    #--forcing_source='daymet'\
+    #--ddpm_train_steps=1000 \
+    #--ddpm_beta_start=1e-4 \
+    #--ddpm_beta_end=2e-2 \
+    #--ddpm_schedule='linear' \
     python3 main.py evaluate \
       --model_name="$model" \
       --seed="$seed" \
@@ -60,13 +66,11 @@ for (( seed=firstseed; seed<firstseed+nseeds; seed++ )); do
       --max_dt=0.1 \
       --warmup=1 \
       --n_layer=6 \
-      --batch_size=128 \
       --ssm_dropout=0.2 \
       --cfi=10 \
       --cfr=10 \
       --pool_type='power'\
       --predict_mode='velocity'\
-      --forcing_source='daymet'\
     > "$logfile" 2>&1 &
   elif [[ "$model" == "seq2seq_ssm" ]]; then
     python3 main.py evaluate \

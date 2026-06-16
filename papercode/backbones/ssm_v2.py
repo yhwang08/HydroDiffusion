@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from models.s4.s4d import S4D as LTI
+from models.s4.s4d_optimized import S4D as LTI
 import pdb
 # ---------------------------------------------------------------------------
 # Dropout selection (as before)

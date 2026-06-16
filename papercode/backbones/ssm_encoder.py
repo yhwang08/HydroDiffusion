@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from models.s4.s4d import S4D as LTI
+from models.s4.s4d_optimized import S4D as LTI
 import pdb
 # ---------------------------------------------------------------------------
 # Dropout selection (as before)
@@ -130,9 +130,9 @@ class ssm_encoder(nn.Module):
             pooled  = (h_seq * weights).sum(dim=1)
             h_enc   = pooled.unsqueeze(1).expand(-1, self.horizon, -1)
         else:  # cross
-            # prepare: seq_len ï¿½ batch ï¿½ dim
+            # prepare: seq_len × batch × dim
             h_t = h_seq.transpose(0,1)                   # (L, B, d_model)
-            # queries: horizon ï¿½ batch ï¿½ dim
+            # queries: horizon × batch × dim
             q   = self.pool_queries.unsqueeze(1).expand(-1, B, -1)
             attn_out, _ = self.cross_attn(q, h_t, h_t)   # (horizon, B, d_model)
             h_enc = attn_out.transpose(0,1)              # (B, horizon, d_model)

@@ -2,11 +2,12 @@
 # Zero-shot GEFS evaluation for a Diffusion Encoder–Decoder LSTM.
 # - Per-basin CSVs with ensemble mean
 # - Global NPZ with full ensemble cube (N_inits, S_samples, H_horizon)
+# - Global NPZ obs saved as (N_inits, H_horizon), not just (N_inits,)
 #
 # Example:
 '''
    python -m papercode.zeroshot_test_lstm \
-     --gpu 7 \
+     --gpu 5 \
      --model_ckpt /data/home/yihan/diffusion_ssm/runs/run_2207_1832_seed3407/best_model.pt \
      --gefs_dir /data/rdl/yihan/GEFS_forecasts \
      --camels_root /data/rdl/yihan/data/basin_dataset_public_v1p2 \
@@ -16,7 +17,7 @@
      --lookback 365 --horizon 8 \
      --num_samples 50 --ddim_steps 10 --eta 0.0 \
      --hidden_size 256 --time_emb_dim 256 --initial_forget_gate_bias 3.0 \
-     --note gefs_zts_lstm
+     --note gefs_zts_lstm_ddim10
 '''
 
 from __future__ import annotations
@@ -290,7 +291,6 @@ def build_model(cfg: Dict) -> torch.nn.Module:
 
     encoder = GenericLSTM(
         input_size = dyn_in + 27,  # concat statics to past features (matches training: 5 + 27 = 32)
-
         hidden_size = cfg.get('hidden_size', 256),
         dropout = cfg.get('dropout', 0.2),
         init_forget_bias = cfg.get('initial_forget_gate_bias', 1.0),
@@ -357,29 +357,25 @@ def build_batched_inputs_for_basin(
             []
         )
 
-    # --- Helper: get Daymet day-0 raw values (prcp,srad,tmax,tmin,vp) for date D ---
     def _day0_daymet_row(D_date: pd.Timestamp) -> np.ndarray:
-        # df15 has TRI_COLUMNS; pick the Daymet columns for date D
-        row = df15.loc[D_date, TRI_COLUMNS]  # may be Series or DataFrame slice
+        row = df15.loc[D_date, TRI_COLUMNS]
         if isinstance(row, pd.DataFrame):
             row = row.iloc[0]
         dm_vals = row[['prcp_daymet','srad_daymet','tmax_daymet','tmin_daymet','vp_daymet']].to_numpy(dtype=np.float32)
-        return dm_vals  # (5,)
+        return dm_vals
 
-    # --- Build future (8, Din): day0 from DAYMET + GEFS leads 1..7 ---
     all_fut: List[np.ndarray] = []
     for t0 in valid_inits:
         g = grp.get_group(t0).sort_values('lead')
         Xg5 = g[['prcp','srad','tmax','tmin','vp']].to_numpy(dtype=np.float32)  # (7,5)
 
-        # Normalize GEFS leads with GEFS stats
         if forcing_source == 'all':
-            # Build normalized (7,15) with GEFS in the active NLDAS slots
             X15 = np.zeros((7, 15), dtype=np.float32)
             names = ['prcp','srad','tmax','tmin','vp']
             bases = [0, 3, 6, 9, 12]
             for i, b in enumerate(bases):
-                mu  = float(GEFS_SCALAR[f"{names[i]}_mean"]) ; sd = float(max(GEFS_SCALAR[f"{names[i]}_std"], 1e-6))
+                mu  = float(GEFS_SCALAR[f"{names[i]}_mean"])
+                sd  = float(max(GEFS_SCALAR[f"{names[i]}_std"], 1e-6))
                 X15[:, b+0] = (Xg5[:, i] - mu) / sd
                 X15[:, b+1] = 0.0
                 X15[:, b+2] = 0.0
@@ -387,22 +383,20 @@ def build_batched_inputs_for_basin(
         else:
             fut_gefs_norm = _normalize_5_gefs(Xg5, GEFS_SCALAR).astype(np.float32)  # (7,5)
 
-        # Day 0 from DAYMET (raw) → normalize with GEFS stats → place into Din
         D = pd.Timestamp(t0.date())
         dm5 = _day0_daymet_row(D)  # (5,)
         if forcing_source == 'all':
-            # create (1,15) day-0 row with Daymet values placed in active slots (NLDAS positions)
             day0 = np.zeros((1, 15), dtype=np.float32)
             names = ['prcp','srad','tmax','tmin','vp']
             bases = [0, 3, 6, 9, 12]
             for i, b in enumerate(bases):
-                mu  = float(GEFS_SCALAR[f"{names[i]}_mean"]) ; sd = float(max(GEFS_SCALAR[f"{names[i]}_std"], 1e-6))
-                day0[:, b+0] = (dm5[i] - mu) / sd   # put Daymet into active slot
-                day0[:, b+1] = 0.0                  # others at mean (0 after norm)
+                mu  = float(GEFS_SCALAR[f"{names[i]}_mean"])
+                sd  = float(max(GEFS_SCALAR[f"{names[i]}_std"], 1e-6))
+                day0[:, b+0] = (dm5[i] - mu) / sd
+                day0[:, b+1] = 0.0
                 day0[:, b+2] = 0.0
             fut8 = np.concatenate([day0, fut_gefs_norm], axis=0)  # (8,15)
         else:
-            # normalize Daymet (5,) with GEFS stats for consistency, then prepend
             day0 = _normalize_5_gefs(dm5[None, :], GEFS_SCALAR)   # (1,5)
             fut8 = np.concatenate([day0, fut_gefs_norm], axis=0)  # (8,5)
 
@@ -410,7 +404,6 @@ def build_batched_inputs_for_basin(
 
     future_batch = np.stack(all_fut, axis=0).astype(np.float32)  # (B,8,Din)
 
-    # --- Past window (reanalysis, normalized by training stats) ---
     Din_past = 15 if forcing_source == 'all' else 5
     xp = np.zeros((len(valid_inits), lookback, Din_past), dtype=np.float32)
     pick = None if forcing_source == 'all' else IDX_MAP[forcing_source]
@@ -421,13 +414,15 @@ def build_batched_inputs_for_basin(
         start = D - pd.Timedelta(days=lookback - 1)
         end   = D
         if (start < idx.min()) or (end > idx.max()):
-            xp[i, :, :] = np.nan; continue
+            xp[i, :, :] = np.nan
+            continue
         Xpast_raw = df15[TRI_COLUMNS].loc[start:end].to_numpy(dtype=np.float32)
         if Xpast_raw.shape[0] != lookback:
-            xp[i, :, :] = np.nan; continue
-        Xpast_n = normalize_multi_features(Xpast_raw, 'inputs', scalar).astype(np.float32)  # (L,15)
+            xp[i, :, :] = np.nan
+            continue
+        Xpast_n = normalize_multi_features(Xpast_raw, 'inputs', scalar).astype(np.float32)
         if pick is not None:
-            Xpast_n = Xpast_n[:, pick].astype(np.float32)                                    # (L,5)
+            Xpast_n = Xpast_n[:, pick].astype(np.float32)
         xp[i] = Xpast_n
 
     good = ~np.isnan(xp).any(axis=(1, 2))
@@ -457,50 +452,52 @@ def run_basin_batched(
     eta: float,
     device: torch.device
 ) -> Tuple[pd.DataFrame, np.ndarray, List[pd.Timestamp], np.ndarray]:
-    # Inputs
     x_past_np, future_np, inits = build_batched_inputs_for_basin(
         gefs_df, camels_root, basin, lookback, forcing_source, scalar, GEFS_SCALAR
     )
-    if len(inits) == 0:
-        cols = ["init_time","obs"]+[f"lead{k}" for k in range(horizon)]
-        return pd.DataFrame(columns=cols), np.zeros((0, num_samples, horizon), np.float32), [], np.zeros((0,), np.float32)
 
-    # Observations & static
+    if len(inits) == 0:
+        cols = (
+            ["init_time"] +
+            [f"obs_lead{k}" for k in range(horizon)] +
+            [f"lead{k}" for k in range(horizon)]
+        )
+        return (
+            pd.DataFrame(columns=cols),
+            np.zeros((0, num_samples, horizon), np.float32),
+            [],
+            np.zeros((0, horizon), np.float32)
+        )
+
     _, area = load_forcing_multi(camels_root, basin)
     q_obs_series = load_discharge(camels_root, basin, area)
 
     static_dim = 27 if True else 0
-    static27 = torch.from_numpy(_load_static_27(attr_db, basin)).to(device) if static_dim>0 else None
+    static27 = torch.from_numpy(_load_static_27(attr_db, basin)).to(device) if static_dim > 0 else None
 
-    B = len(inits) ; H = horizon
+    B = len(inits)
+    H = horizon
     x_past_all = torch.from_numpy(x_past_np).to(device).float()   # (B,L,D)
-    future_all = torch.from_numpy(future_np).to(device).float()   # (B,7(or H-1),D)
+    future_all = torch.from_numpy(future_np).to(device).float()   # (B,H,D)
 
-    # (B,H,27) broadcasted static for decoder
     if static27 is not None:
         static_all = static27.unsqueeze(0).unsqueeze(1).repeat(B, H, 1).float()
     else:
         static_all = None
 
-    # For the ENCODER: training used statics concatenated to past along features.
-    # Build (B,L,27) and concat with x_past to match encoder.input_size = Din+27.
     L = x_past_np.shape[1]
     static_enc = static27.unsqueeze(0).unsqueeze(1).repeat(B, L, 1).float()
     x_past_all = torch.from_numpy(x_past_np).to(device).float()
     x_past_all = torch.cat([x_past_all, static_enc], dim=2)  # (B,L,Din+27)
 
-    future_all = torch.from_numpy(future_np).to(device).float()   # (B,7,Din)
-
+    future_all = torch.from_numpy(future_np).to(device).float()   # (B,H,Din)
 
     ens_out = np.zeros((B, num_samples, H), dtype=np.float32)
 
     for s in range(0, B, batch_inits):
         e = min(s + batch_inits, B)
-        # Encoder input expected by GenericLSTM in this codebase is (T,B,D),
-        # not batch-first. Transpose after slicing the batch.
-        xs = x_past_all[s:e]                    # (b,L,Din+27)
-
-        fs = future_all[s:e]                          # (b,7,Din) — wrapper handles decoder shapes
+        xs = x_past_all[s:e]  # (b,L,Din+27)
+        fs = future_all[s:e]  # (b,H,Din)
         st = static_all[s:e] if static_all is not None else None  # (b,H,27)
 
         samp_acc = []
@@ -511,16 +508,30 @@ def run_basin_batched(
         S = np.stack(samp_acc, axis=1)  # (b,S,H)
         ens_out[s:e, :, :] = S
 
-    # mean predictions & obs
     means = ens_out.mean(axis=1)  # (B,H)
-    obs = [] ; rows = []
+    obs = []
+    rows = []
+
     for i, t0 in enumerate(inits):
         d0 = pd.Timestamp(t0.date())
-        obs_val = float(q_obs_series.loc[d0]) if d0 in q_obs_series.index else np.nan
-        obs.append(np.float32(obs_val))
-        rows.append({"init_time": t0, "obs": float(obs_val), **{f"lead{k}": float(means[i, k]) for k in range(H)}})
+
+        obs_row = []
+        for k in range(H):
+            dk = d0 + pd.Timedelta(days=k)
+            obs_row.append(float(q_obs_series.loc[dk]) if dk in q_obs_series.index else np.nan)
+
+        obs.append(obs_row)
+
+        row = {
+            "init_time": t0,
+            **{f"obs_lead{k}": obs_row[k] for k in range(H)},
+            **{f"lead{k}": float(means[i, k]) for k in range(H)}
+        }
+        rows.append(row)
 
     df_mean = pd.DataFrame(rows).sort_values("init_time").reset_index(drop=True)
+
+    # obs shape: (B,H)
     return df_mean, ens_out, inits, np.array(obs, dtype=np.float32)
 
 # --------------------------- MAIN --------------------------------------------
@@ -565,8 +576,10 @@ if getattr(args, 'd_input', None) is not None:
 for k, v in CFG.items():
     logging.info(f"{k}: {v if k!='DEVICE' else device.type}")
 
-out_root = Path(args.out_dir); out_root.mkdir(parents=True, exist_ok=True)
-per_basin_dir = out_root / "per_basin_csv_lstm"; per_basin_dir.mkdir(parents=True, exist_ok=True)
+out_root = Path(args.out_dir)
+out_root.mkdir(parents=True, exist_ok=True)
+per_basin_dir = out_root / "per_basin_csv_lstm"
+per_basin_dir.mkdir(parents=True, exist_ok=True)
 
 # model
 model = build_model(CFG)
@@ -586,19 +599,19 @@ logging.info(f"Basins to process: {len(basins)}")
 # scalars
 GSCALAR = load_scalar(args.scalar)
 GEFS_SCALAR = compute_or_load_gefs_scalar(
-    gefs_dir = Path(args.gefs_dir),
-    cache_path = Path(args.out_dir) / "gefs_scalar.json",
-    force_recompute = False
+    gefs_dir=Path(args.gefs_dir),
+    cache_path=Path(args.out_dir) / "gefs_scalar.json",
+    force_recompute=False
 )
 logging.info(f"GEFS scalar loaded: {GEFS_SCALAR}")
 
 # globals
 G_ens: List[np.ndarray] = []
 G_dates: List[pd.Timestamp] = []
-G_obs:   List[float] = []
-G_bas:   List[str] = []
+G_obs: List[List[float]] = []
+G_bas: List[str] = []
 
-ok=skip=fail=0
+ok = skip = fail = 0
 t_all0 = time.time()
 
 for i, b in enumerate(basins, 1):
@@ -653,7 +666,7 @@ for i, b in enumerate(basins, 1):
     G_ens.append(ens_cube)
     G_dates.extend(inits)
     G_obs.extend(obs_vec.tolist())
-    G_bas.extend([b]*len(inits))
+    G_bas.extend([b] * len(inits))
     ok += 1
 
 # save global NPZ
@@ -661,7 +674,7 @@ if G_ens:
     ens_arr = np.concatenate(G_ens, axis=0)   # (N,S,H)
     bas_arr = np.array(G_bas, dtype="U32")
     dts_arr = np.array(G_dates, dtype="datetime64[ns]")
-    obs_arr = np.array(G_obs, dtype=float)
+    obs_arr = np.array(G_obs, dtype=float)    # (N,H)
     note = f"_{args.note}" if args.note else ""
     npz_path = Path(args.out_dir) / f"gefs_ensembles_lstm_{args.forcing}_S{args.num_samples}{note}.npz"
     np.savez(npz_path, basins=bas_arr, dates=dts_arr, obs=obs_arr, ens=ens_arr)
@@ -672,4 +685,3 @@ else:
     logging.warning(f"[GLOBAL] No predictions produced. (ok={ok}, skip={skip}, fail={fail})")
 
 logging.info(f"Total wall clock: {(time.time()-t_all0)/60:.1f} min.")
-

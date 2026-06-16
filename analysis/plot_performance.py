@@ -89,6 +89,8 @@ LABEL = {
     "decoder_only_ssm_ddim15_det":"ddim15",
     "decoder_only_ssm_ddim5_det":"ddim5",
     "decoder_only_ssm_ddim3_det":"ddim3",
+    "decoder_only_ssm_ddim2_det":"ddim2",
+    #"decoder_only_ssm_ddim1_det":"ddim1",
     "diffusion_decoder_only_ssm_daymet_aligned_det":"ddim10",
 
 }
@@ -157,7 +159,7 @@ for ax, metric, title in zip(axes, metric_keys, metric_titles):
     ax.set_title(title)
     ax.set_xlabel("Lead Time (days)")
     ax.set_ylabel("Performance")
-    ax.set_ylim([0.7, 0.9])
+    #ax.set_ylim([0.7, 0.9])
     ax.set_xticks(sorted(all_leads))
     ax.grid(True)
     ax.legend()

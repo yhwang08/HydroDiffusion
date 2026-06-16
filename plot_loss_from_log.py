@@ -54,7 +54,7 @@ for path in log_files:
 fig, ax = plt.subplots(figsize=(15, 6))
 ax.set(title="Training vs Validation losses (all runs)",
        xlabel="Epoch", ylabel="Loss")
-ax.set_xlim(0, 60)
+#ax.set_xlim(0, 60)
 ax.grid(alpha=0.3, linestyle="--")
 
 palette = cycle(plt.rcParams["axes.prop_cycle"].by_key()["color"])
