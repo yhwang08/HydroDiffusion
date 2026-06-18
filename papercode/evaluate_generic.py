@@ -41,9 +41,8 @@ from papercode.seq2seq_ssm import seq2seq_ssm
 from papercode.backbones.ssm_v1 import ssm_v1
 from papercode.backbones.ssm_v2 import ssm_v2
 from papercode.backbones.ssm_encoder import ssm_encoder
-#from papercode.decoder_only_ssm import decoder_only_ssm
-#from papercode.decoder_only_ssm_hybrid import decoder_only_ssm
-from papercode.decoder_only_ssm_hybrid import decoder_only_ssm
+from papercode.decoder_only_ssm import decoder_only_ssm
+from papercode.decoder_only_ssm_hybrid import decoder_only_ssm as decoder_only_ssm_hybrid
 
 from papercode.runtime_profiler import RuntimeProfiler
 
@@ -183,7 +182,7 @@ def evaluate(cfg: dict):
     is_diffusion = (
         cfg["model_name"] in [
             "diffusion_lstm", "diffusion_lstm_fast", "diffusion_unet", "diffusion_ssm",
-            "decoder_only_ssm", "decoder_only_lstm", "decoder_only_lstm_fast",
+            "decoder_only_ssm", "decoder_only_ssm_hybrid", "decoder_only_lstm", "decoder_only_lstm_fast",
             "diffusion_ssm_unet", "diffusion_ssm_lstm"
         ]
     )
@@ -291,8 +290,9 @@ def evaluate(cfg: dict):
                 prediction_type='velocity'
             ).to(cfg['DEVICE'])
 
-        elif cfg['model_name'] == 'decoder_only_ssm':
-            model = decoder_only_ssm(
+        elif cfg['model_name'] in ['decoder_only_ssm', 'decoder_only_ssm_hybrid']:
+            cls = decoder_only_ssm_hybrid if cfg['model_name'] == 'decoder_only_ssm_hybrid' else decoder_only_ssm
+            model = cls(
                 d_input=in_size_dyn,
                 d_model=cfg['d_model'],
                 n_layers=cfg['n_layers'],
@@ -490,12 +490,12 @@ def evaluate(cfg: dict):
                 if is_diffusion:
                     x_past = x_d[:, :-fh, :]
 
-                    if cfg['model_name'] in ['decoder_only_ssm', 'decoder_only_lstm', 'decoder_only_lstm_fast']:
+                    if cfg['model_name'] in ['decoder_only_ssm', 'decoder_only_ssm_hybrid', 'decoder_only_lstm', 'decoder_only_lstm_fast']:
                         future_prec = x_d[:, -fh+1:, :]
                     else:
                         future_prec = x_d[:, -fh:, :]
 
-                    if (not cfg['no_static']) and cfg['concat_static'] and cfg['model_name'] not in ['decoder_only_ssm', 'decoder_only_lstm', 'decoder_only_lstm_fast']:
+                    if (not cfg['no_static']) and cfg['concat_static'] and cfg['model_name'] not in ['decoder_only_ssm', 'decoder_only_ssm_hybrid', 'decoder_only_lstm', 'decoder_only_lstm_fast']:
                         stat_p = static_attrs.unsqueeze(1).repeat(1, x_past.size(1), 1)
                         x_past = torch.cat([x_past, stat_p], dim=-1)
 
@@ -508,7 +508,7 @@ def evaluate(cfg: dict):
                     # SSM: avoids re-running 6-layer S4D FFT over 365-step past 50 times.
                     # LSTM: avoids re-running past LSTM encoding 50 times.
                     use_fft_cache = (
-                        cfg["model_name"] == "decoder_only_ssm"
+                        cfg["model_name"] in ["decoder_only_ssm", "decoder_only_ssm_hybrid"]
                         and hasattr(model, "encode_past_fft")
                         and not profile_runtime
                     )
