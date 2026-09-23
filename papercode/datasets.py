@@ -10,6 +10,7 @@ import sqlite3
 
 from .datautils import (
     load_attributes,
+    load_static_attributes,
     load_discharge,
     load_forcing,
     load_forcing_multi,
@@ -110,8 +111,10 @@ class CamelsTXT(Dataset):
         self.input_means = X_raw.mean(axis=0)
         self.input_stds = X_raw.std(axis=0)
         
-        self.output_mean = y.mean()
-        self.output_std = y.std()
+        # statistics over valid days only
+        _valid = np.isfinite(y) & (y >= 0)
+        self.output_mean = float(y[_valid].mean()) if _valid.any() else float("nan")
+        self.output_std = float(y[_valid].std()) if _valid.any() else float("nan")
         
         # 6) Normalize
         if self.normalize_perbasin:
@@ -127,8 +130,10 @@ class CamelsTXT(Dataset):
             x = np.delete(x, np.argwhere(y < 0)[:, 0], axis=0)
             y = np.delete(y, np.argwhere(y < 0)[:, 0], axis=0)
             if np.isnan(y).any():
-                x = np.delete(x, np.argwhere(np.isnan(y)), axis=0)
-                y = np.delete(y, np.argwhere(np.isnan(y)), axis=0)
+                # rows (windows) containing a NaN target
+                nan_rows = np.unique(np.argwhere(np.isnan(y))[:, 0])
+                x = np.delete(x, nan_rows, axis=0)
+                y = np.delete(y, nan_rows, axis=0)
             self.q_std = np.std(y)
             #y = normalize_multi_features(y, 'output', SCALAR) # todo, normalize streamflow!
         # 9) To tensors
@@ -226,31 +231,20 @@ class CamelsH5(Dataset):
     # attribute loader
     # ------------------------------------------------------------------
     def _load_attributes(self):
-        conn   = sqlite3.connect(self.db_path)
-        tables = [r[0] for r in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table';"
-        ).fetchall()]
-        if not tables:
-            raise RuntimeError(f"No tables in {self.db_path}")
-        tbl = tables[0]
-
-        df_full = pd.read_sql(f"SELECT * FROM {tbl}", conn)
-        conn.close()
-
-        id_col = 'gauge_id' if 'gauge_id' in df_full.columns else df_full.columns[0]
-        df_full.set_index(id_col, inplace=True)
-
-        numeric = df_full.select_dtypes(include=[np.number]).fillna(0.0)
-        means   = numeric.mean()
-        stds    = numeric.std().replace(0.0, 1.0)
-        normed  = (numeric - means) / stds
-
-        df_sub = normed.loc[self.basins].iloc[:, :27]
-
-        self.attr_means  = means
-        self.attr_stds   = stds
-        self.attr_names  = df_sub.columns
-        self.attr_df     = df_sub
+        # the 27 static attributes, selected by name and z-scored over the basins this dataset uses
+        self.attr_df = load_static_attributes(self.db_path, self.basins)
+        raw_stats = self.attr_df.columns
+        self.attr_names = raw_stats
+        # kept for backward compatibility with code that reads these (mean/std of the raw values)
+        import sqlite3 as _sq, pandas as _pd
+        with _sq.connect(self.db_path) as _c:
+            _t = _c.execute("SELECT name FROM sqlite_master WHERE type='table';").fetchone()[0]
+            _df = _pd.read_sql(f"SELECT * FROM '{_t}'", _c)
+        _df = _df.set_index('gauge_id' if 'gauge_id' in _df.columns else _df.columns[0])
+        _df.index = _df.index.astype(str)
+        _raw = _df.loc[list(self.basins), list(raw_stats)].astype(float)
+        self.attr_means = _raw.mean()
+        self.attr_stds = _raw.std().replace(0.0, 1.0)
 
     # ------------------------------------------------------------------
     def __len__(self):

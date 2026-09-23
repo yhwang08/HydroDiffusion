@@ -481,3 +481,53 @@ def load_discharge(camels_root: PosixPath, basin: str, area: int) -> pd.Series:
     df.QObs = 28316846.592 * df.QObs * 86400 / (area * 10**6)
 
     return df.QObs
+
+
+# ---------------------------------------------------------------------------
+# Static catchment attributes: the 27 Kratzert et al. (2019) attributes, selected by name.
+# ---------------------------------------------------------------------------
+STATIC_ATTRIBUTES = [
+    "p_mean", "pet_mean", "p_seasonality", "frac_snow", "aridity",
+    "high_prec_freq", "high_prec_dur", "low_prec_freq", "low_prec_dur",
+    "elev_mean", "slope_mean", "area_gages2",
+    "soil_depth_pelletier", "soil_depth_statsgo", "soil_porosity", "soil_conductivity",
+    "max_water_content", "sand_frac", "silt_frac", "clay_frac",
+    "carbonate_rocks_frac", "geol_permeability",
+    "frac_forest", "lai_max", "lai_diff", "gvf_max", "gvf_diff",
+]
+
+
+def load_static_attributes(db_path, basins, norm_basins=None):
+    """Return a DataFrame (index = `basins`, columns = STATIC_ATTRIBUTES) of z-scored static attributes.
+
+    * columns are selected by name from the attributes table (extra columns are ignored);
+    * mean/std are computed over `norm_basins` (default: `basins`);
+    * raises if a required column / basin is missing or a value is NaN.
+    """
+    import sqlite3
+    import pandas as pd
+
+    basins = list(basins)
+    norm_basins = list(basins if norm_basins is None else norm_basins)
+    with sqlite3.connect(str(db_path)) as conn:
+        tbl = conn.execute("SELECT name FROM sqlite_master WHERE type='table';").fetchall()
+        if not tbl:
+            raise RuntimeError(f"No tables in {db_path}")
+        df = pd.read_sql(f"SELECT * FROM '{tbl[0][0]}'", conn)
+    id_col = "gauge_id" if "gauge_id" in df.columns else df.columns[0]
+    df = df.set_index(id_col)
+    df.index = df.index.astype(str)
+
+    missing_cols = [c for c in STATIC_ATTRIBUTES if c not in df.columns]
+    if missing_cols:
+        raise ValueError(f"{db_path} lacks static attributes {missing_cols}")
+    need = sorted(set(basins) | set(norm_basins))
+    missing_basins = [b for b in need if b not in df.index]
+    if missing_basins:
+        raise ValueError(f"{db_path} lacks {len(missing_basins)} basins, e.g. {missing_basins[:5]}")
+
+    raw = df.loc[norm_basins, STATIC_ATTRIBUTES].astype(float)
+    if raw.isna().any().any():
+        raise ValueError(f"NaN static attributes in columns {raw.columns[raw.isna().any()].tolist()}")
+    means, stds = raw.mean(), raw.std().replace(0.0, 1.0)
+    return (df.loc[basins, STATIC_ATTRIBUTES].astype(float) - means) / stds

@@ -82,16 +82,17 @@ def create_h5_files(
             q_combined = []
             date_strings = []
 
+            mean_q = ds.output_mean
+            std_q = ds.output_std
+            if not np.isfinite(std_q) or std_q == 0:
+                print(f"WARNING: skipping basin {basin}: no usable streamflow in this split (std={std_q})")
+                continue
+
             for i in range(num_samples):
                 past = x_np[i]
                 future = x_np[i:i+forecast_horizon, -1, :] # i+1:i+1+forecast_horizon, wrong!
                 target = y_np[i]
 
-                mean_q = ds.output_mean
-                std_q = ds.output_std
-
-                if np.isnan(std_q) or std_q == 0:
-                    continue
 
                 x_window = np.vstack([past, future])
                 x_combined.append(x_window)
