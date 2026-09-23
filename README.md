@@ -9,7 +9,7 @@ This repository contains:
 - Scripts for deterministic and probabilistic performance evaluation.  
 - The **HydroDiffusion checkpoint used in the paper**, provided for reproducibility in  
   ```
-  runs/run_2507_2120_seed3407/model_epoch60.pt
+  runs/run_1909_1017_seed3407/model_epoch60.pt
   ```
 ---
 
